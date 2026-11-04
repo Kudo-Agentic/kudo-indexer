@@ -1,0 +1,58 @@
+specVersion: 1.0.0
+description: >-
+  Kudo covenants on Robinhood Chain: covenants, agent records and the event
+  history behind them.
+repository: https://github.com/Kudo-Dev-tech/kudo-indexer
+schema:
+  file: ./schema.graphql
+
+# Both Kudo deployments share abi v5's signatures and one mapping. They
+# number the status uint8 differently; src/contracts.ts decodes it per
+# address.
+dataSources:
+  - kind: ethereum/contract
+    # Current contract: minted on and settled on.
+    name: Kudo
+    network: robinhood-mainnet
+    source:
+      address: "0x1930D0FEaB14b024353bF22adE03Db989aD640C7"
+      abi: Kudo
+      # Its first log (the deploy).
+      startBlock: 102780355
+    mapping: &mapping
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - Covenant
+        - Agent
+        - CovenantEvent
+        - Ownership
+        - Stats
+      abis:
+        - name: Kudo
+          file: ./abis/Kudo.json
+        - name: IdentityRegistry
+          file: ./abis/IdentityRegistry.json
+      eventHandlers:
+        - event: CovenantMinted(uint256,indexed address,string,string,string)
+          handler: handleCovenantMinted
+        - event: AskSettlementSet(uint256,string,string)
+          handler: handleAskSettlementSet
+        - event: PromiseSettlementSet(uint256,string)
+          handler: handlePromiseSettlementSet
+        - event: CovenantPromiseSet(indexed uint256,uint8)
+          handler: handleCovenantPromiseSet
+        - event: Transfer(indexed address,indexed address,indexed uint256)
+          handler: handleTransfer
+      file: ./src/mapping.ts
+
+  - kind: ethereum/contract
+    # Legacy contract: covenants 0-9, read-only since the redeploy.
+    name: KudoLegacy
+    network: robinhood-mainnet
+    source:
+      address: "0xc269c6176f3418A84FCdA5911723B0d358971351"
+      abi: Kudo
+      startBlock: 80443358
+    mapping: *mapping

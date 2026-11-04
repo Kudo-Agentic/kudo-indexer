@@ -1,0 +1,26 @@
+[
+  {
+    "type": "function",
+    "name": "getMetadata",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "agentId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "key",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ]
+  }
+]

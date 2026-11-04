@@ -1,7 +1,7 @@
 /**
- * A dependency-free client for the indexer's GraphQL endpoint: what the SDK's
- * `listOpenAsks()` / `getAgentRecord()` and kudo-client's card grid, job
- * board and agent directory read.
+ * A dependency-free client for the subgraph's GraphQL endpoint: what the
+ * SDK's `listOpenAsks()` / `getAgentRecord()` and kudo-client's card grid,
+ * job board and agent directory read.
  *
  * Copy this file into a consumer, or import it from this repo. It only needs
  * a global `fetch` (Node 18+, browsers, Next.js).
@@ -9,10 +9,16 @@
 
 export type CovenantStatus = "Minted" | "Ongoing" | "Completed" | "Failed";
 
-// Hasura may return BigInt/numeric columns as strings or numbers depending on
-// its settings, so they are read as either and normalized here.
-type Numeric = string | number;
+export type CovenantEventKind =
+  | "Minted"
+  | "AskSettled"
+  | "PromiseSettled"
+  | "StatusSet"
+  | "Transferred"
+  | "Burned";
 
+// Subgraphs return BigInt and BigDecimal as strings and Bytes as lowercase
+// hex. BigInts are kept as decimal strings here; completionRate is a number.
 export type Covenant = {
   id: string;
   contract: string;
@@ -40,7 +46,7 @@ export type Covenant = {
   burned: boolean;
   burnedAt: string | null;
   mintedAt: string;
-  mintedBlock: number;
+  mintedBlock: string;
   mintedTx: string;
 };
 
@@ -61,11 +67,11 @@ export type AgentRecord = {
 
 export type CovenantEvent = {
   id: string;
-  covenant_id: string;
-  kind: "Minted" | "AskSettled" | "PromiseSettled" | "StatusSet" | "Transferred" | "Burned";
+  covenantId: string;
+  kind: CovenantEventKind;
   value: string;
   agentWallet: string;
-  blockNumber: number;
+  blockNumber: string;
   timestamp: string;
   txHash: string;
   txFrom: string;
@@ -94,43 +100,34 @@ const AGENT_FIELDS = `
   completionRate firstCovenantAt lastCovenantAt
 `;
 
-const NUMERIC_KEYS = new Set([
-  "nftId",
-  "agentId",
-  "askSettledAt",
-  "promiseSettledAt",
-  "burnedAt",
-  "mintedAt",
-  "firstCovenantAt",
-  "lastCovenantAt",
-  "timestamp",
-]);
+const EVENT_FIELDS = `
+  id covenant { id } kind value agentWallet blockNumber timestamp txHash txFrom
+`;
 
-// Float columns Hasura serializes as strings.
-const FLOAT_KEYS = new Set(["completionRate"]);
+type RawEvent = Omit<CovenantEvent, "covenantId"> & { covenant: { id: string } };
 
-/** BigInt columns as decimal strings and floats as numbers, whichever way Hasura sent them. */
-const normalize = <T>(value: unknown): T =>
-  JSON.parse(JSON.stringify(value), (key, v: unknown) => {
-    if (v === null || v === undefined) return v;
-    if (NUMERIC_KEYS.has(key)) return String(v as Numeric);
-    if (FLOAT_KEYS.has(key)) return Number(v);
-    return v;
-  }) as T;
+const toEvent = ({ covenant, ...rest }: RawEvent): CovenantEvent => ({
+  ...rest,
+  covenantId: covenant.id,
+});
+
+type RawAgent = Omit<AgentRecord, "completionRate"> & { completionRate: string | null };
+
+const toAgent = (agent: RawAgent): AgentRecord => ({
+  ...agent,
+  completionRate: agent.completionRate === null ? null : Number(agent.completionRate),
+});
 
 export type KudoIndexerOptions = {
-  /** The GraphQL endpoint, e.g. https://indexer.hyperindex.xyz/<id>/v1/graphql. */
+  /**
+   * The subgraph's GraphQL endpoint, e.g.
+   * https://api.goldsky.com/api/public/<project>/subgraphs/kudo-indexer/<version>/gn
+   */
   url: string;
-  /** Chain to read. Rows are per chain; Robinhood Chain by default. */
-  chainId?: number;
   fetch?: typeof fetch;
 };
 
-export const createKudoIndexerClient = ({
-  url,
-  chainId = 4663,
-  fetch: fetchImpl = fetch,
-}: KudoIndexerOptions) => {
+export const createKudoIndexerClient = ({ url, fetch: fetchImpl = fetch }: KudoIndexerOptions) => {
   const query = async <T>(document: string, variables: Record<string, unknown> = {}) => {
     const response = await fetchImpl(url, {
       method: "POST",
@@ -143,26 +140,23 @@ export const createKudoIndexerClient = ({
       errors?: { message: string }[];
     };
     if (errors?.length) throw new Error(errors.map((e) => e.message).join("; "));
-    return normalize<T>(data);
+    if (!data) throw new Error("Indexer answered without data");
+    return data;
   };
 
-  // Filters are built here rather than passed as nullable variables: how
-  // Hasura reads `_eq: null` depends on server settings.
-  const listWhere = async (where: Record<string, unknown>, limit: number, offset: number) =>
+  // Filters are built here rather than passed as nullable variables: a null
+  // in a subgraph `where` filter means "equals null", not "no filter".
+  const listWhere = async (where: Record<string, unknown>, first: number, skip: number) =>
     (
-      await query<{ Covenant: Covenant[] }>(
-        `query Covenants($where: Covenant_bool_exp!, $limit: Int!, $offset: Int!) {
-          Covenant(where: $where, order_by: { mintedAt: desc }, limit: $limit, offset: $offset) {
+      await query<{ covenants: Covenant[] }>(
+        `query Covenants($where: Covenant_filter!, $first: Int!, $skip: Int!) {
+          covenants(where: $where, orderBy: mintedAt, orderDirection: desc, first: $first, skip: $skip) {
             ${COVENANT_FIELDS}
           }
         }`,
-        {
-          where: { ...where, chainId: { _eq: chainId }, hidden: { _eq: false } },
-          limit,
-          offset,
-        },
+        { where: { ...where, hidden: false }, first, skip },
       )
-    ).Covenant;
+    ).covenants;
 
   return {
     query,
@@ -174,10 +168,7 @@ export const createKudoIndexerClient = ({
       agentWallet?: string;
     } = {}) =>
       listWhere(
-        {
-          askOpen: { _eq: true },
-          ...(agentWallet ? { agentWallet: { _eq: agentWallet.toLowerCase() } } : {}),
-        },
+        { askOpen: true, ...(agentWallet ? { agentWallet: agentWallet.toLowerCase() } : {}) },
         limit,
         offset,
       ),
@@ -187,79 +178,66 @@ export const createKudoIndexerClient = ({
       limit?: number;
       offset?: number;
       status?: CovenantStatus;
-    } = {}) => listWhere(status ? { status: { _eq: status } } : {}, limit, offset),
+    } = {}) => listWhere(status ? { status } : {}, limit, offset),
 
     /** One covenant by contract and id, with its event history. */
     getCovenant: async (contract: string, nftId: bigint | number | string) => {
       const data = await query<{
-        Covenant: (Covenant & { events: CovenantEvent[] })[];
+        covenant: (Covenant & { events: RawEvent[] }) | null;
       }>(
-        `query Covenant($chainId: Int!, $id: String!) {
-          Covenant(where: { chainId: { _eq: $chainId }, id: { _eq: $id } }) {
+        `query Covenant($id: ID!) {
+          covenant(id: $id) {
             ${COVENANT_FIELDS}
-            events(order_by: { blockNumber: asc, logIndex: asc }) {
-              id covenant_id kind value agentWallet blockNumber timestamp txHash txFrom
-            }
+            events(orderBy: blockNumber, orderDirection: asc) { ${EVENT_FIELDS} }
           }
         }`,
-        { chainId, id: `${contract.toLowerCase()}:${nftId.toString()}` },
+        { id: `${contract.toLowerCase()}:${nftId.toString()}` },
       );
-      return data.Covenant[0];
+      return data.covenant && { ...data.covenant, events: data.covenant.events.map(toEvent) };
     },
 
     /** Kept vs broken for one agent, by wallet. */
-    getAgentRecord: async (wallet: string) =>
-      (
-        await query<{ Agent: AgentRecord[] }>(
-          `query Agent($chainId: Int!, $id: String!) {
-            Agent(where: { chainId: { _eq: $chainId }, id: { _eq: $id } }) { ${AGENT_FIELDS} }
-          }`,
-          { chainId, id: wallet.toLowerCase() },
-        )
-      ).Agent[0],
+    getAgentRecord: async (wallet: string) => {
+      const { agent } = await query<{ agent: RawAgent | null }>(
+        `query Agent($id: ID!) { agent(id: $id) { ${AGENT_FIELDS} } }`,
+        { id: wallet.toLowerCase() },
+      );
+      return agent && toAgent(agent);
+    },
 
     /** Every agent with a visible covenant, busiest first: the directory. */
     listAgents: async ({ limit = 100 }: { limit?: number } = {}) =>
       (
-        await query<{ Agent: AgentRecord[] }>(
-          `query Agents($chainId: Int!, $limit: Int!) {
-            Agent(
-              where: { chainId: { _eq: $chainId }, total: { _gt: 0 } }
-              order_by: [{ total: desc }, { lastCovenantAt: desc }]
-              limit: $limit
-            ) { ${AGENT_FIELDS} }
+        await query<{ agents: RawAgent[] }>(
+          `query Agents($first: Int!) {
+            agents(where: { total_gt: 0 }, orderBy: total, orderDirection: desc, first: $first) {
+              ${AGENT_FIELDS}
+            }
           }`,
-          { chainId, limit },
+          { first: limit },
         )
-      ).Agent,
+      ).agents.map(toAgent),
 
     /** The newest covenant events across the chain: the activity feed. */
     listActivity: async ({ limit = 50 }: { limit?: number } = {}) =>
       (
-        await query<{ CovenantEvent: CovenantEvent[] }>(
-          `query Activity($chainId: Int!, $limit: Int!) {
-            CovenantEvent(
-              where: { chainId: { _eq: $chainId } }
-              order_by: [{ blockNumber: desc }, { logIndex: desc }]
-              limit: $limit
-            ) { id covenant_id kind value agentWallet blockNumber timestamp txHash txFrom }
+        await query<{ covenantEvents: RawEvent[] }>(
+          `query Activity($first: Int!) {
+            covenantEvents(orderBy: blockNumber, orderDirection: desc, first: $first) {
+              ${EVENT_FIELDS}
+            }
           }`,
-          { chainId, limit },
+          { first: limit },
         )
-      ).CovenantEvent,
+      ).covenantEvents.map(toEvent),
 
     /** Chain-wide totals: the metrics row. */
     getStats: async () =>
       (
-        await query<{ Stats: Stats[] }>(
-          `query Stats($chainId: Int!) {
-            Stats(where: { chainId: { _eq: $chainId }, id: { _eq: "global" } }) {
-              covenants agents minted ongoing completed failed openAsks
-            }
-          }`,
-          { chainId },
+        await query<{ stats: Stats | null }>(
+          `{ stats(id: "global") { covenants agents minted ongoing completed failed openAsks } }`,
         )
-      ).Stats[0],
+      ).stats,
   };
 };
 

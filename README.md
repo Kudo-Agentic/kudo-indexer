@@ -1,33 +1,39 @@
 # kudo-indexer
 
-An [Envio HyperIndex](https://docs.envio.dev) indexer for Kudo covenants on
-Robinhood Chain (4663). It turns the Kudo contracts' events into covenants,
-agent records and an event history, and serves them over GraphQL. kudo-client,
-the SDK (`listOpenAsks`, `getAgentRecord`, `watchSettlement`), the job board
-and the agent directory can all read this one endpoint instead of calling RPC
-log reads on every request.
+A subgraph for Kudo covenants on Robinhood Chain, deployed on
+[Goldsky](https://goldsky.com). It turns the Kudo contracts' events into
+covenants, agent records and an event history, and serves them over GraphQL.
+kudo-client, the SDK (`listOpenAsks`, `getAgentRecord`, `watchSettlement`),
+the job board and the agent directory can all read this one endpoint instead
+of calling RPC log reads on every request.
+
+The earlier Envio HyperIndex version of the same indexer is on the `envio`
+branch. This one has the same entities, the same rules and the same results.
 
 ## What it indexes
 
-| Contract | Address | Status enum |
+| Data source | Address | Status enum |
 | --- | --- | --- |
-| Kudo (current) | `0x1930D0FEaB14b024353bF22adE03Db989aD640C7` | MINTED, ONGOING, COMPLETED, FAILED |
-| Kudo (legacy, covenants 0–9) | `0xc269c6176f3418A84FCdA5911723B0d358971351` | ONGOING, COMPLETED, FAILED |
+| `Kudo` (current) | `0x1930D0FEaB14b024353bF22adE03Db989aD640C7` | MINTED, ONGOING, COMPLETED, FAILED |
+| `KudoLegacy` (covenants 0–9) | `0xc269c6176f3418A84FCdA5911723B0d358971351` | ONGOING, COMPLETED, FAILED |
 
-Both run abi v5, so one contract definition covers both addresses. They number
-the status `uint8` differently, and `src/lib/contracts.ts` decodes it for
-each address. Indexing starts at block 80,443,358, the legacy contract's
-first log.
+Both run abi v5 and share one mapping. They number the status `uint8`
+differently, and `src/contracts.ts` decodes it for each address. Each data
+source starts at its contract's first log. The network is `robinhood-mainnet`.
 
 Events: `CovenantMinted`, `AskSettlementSet`, `PromiseSettlementSet`,
-`CovenantPromiseSet` (status) and `Transfer` (ownership).
+`CovenantPromiseSet` (status) and `Transfer` (ownership and burns).
+
+`CovenantMinted` leaves out the agent's ERC-8004 id, and most mints arrive
+through an ERC-4337 smart account, so the id can't be read from the
+transaction either. At each mint, the mapping calls `getCovenant(nftId)` and
+the Identity Registry's `getMetadata(agentId, "name")`, both at the mint
+block.
 
 ## Entities
 
 - **Covenant**: one per NFT, keyed `"<contract lowercased>:<nftId>"`, the
-  same key as kudo-client's `covenantKey`. It holds the ask, the promise, both
-  settlements (with block time, sender and tx), the owner, and the agent's
-  ERC-8004 `agentId` and name, both read from chain at mint.
+  same key as kudo-client's `covenantKey`.
   - `recordedStatus` is what the contract says.
   - `status` is what the UI shows, following the client's `presentedStatus`:
     a covenant with both proofs written reads Completed.
@@ -43,29 +49,28 @@ Events: `CovenantMinted`, `AskSettlementSet`, `PromiseSettlementSet`,
   feed and the proof trail.
 - **Stats** (`id: "global"`): chain-wide totals for the metrics row.
 
-The counts are updated incrementally by `src/lib/state.ts`. Every covenant
-write goes through that file, so the rollups stay in step with the rows they
+The counts are updated incrementally by `src/state.ts`. Every covenant write
+goes through that file, so the rollups stay in step with the rows they
 summarize.
 
-## Run it
+## Build and deploy
 
 ```bash
 pnpm install
-cp .env.example .env   # add ENVIO_API_TOKEN (HyperSync needs one)
-pnpm dev               # Postgres + Hasura in Docker, GraphQL at http://localhost:8080
-pnpm test              # simulated events, no network
+pnpm codegen
+pnpm build
+
+npm i -g @goldskycom/cli
+goldsky login            # paste your Goldsky API key
+pnpm run deploy          # goldsky subgraph deploy kudo-indexer/<package version> --path .
 ```
 
-Hasura's console is at http://localhost:8080 (admin secret `testing`).
+To ship a change, bump `version` in `package.json` and deploy again. Then
+move the `prod` tag so consumers keep one URL:
 
-**Without an API token**, you can sync from RPC instead. In `config.yaml`,
-remove `hypersync_config` and set the RPC's `for:` to `sync`. A full backfill
-over the public RPC takes about 4 minutes; HyperSync takes seconds.
-
-**Deploy**: push this repo to GitHub and connect it on
-[Envio Cloud](https://envio.dev/app), then set the same env vars there. The
-fallback is to self-host with `pnpm start` against your own Postgres and
-Hasura.
+```bash
+goldsky subgraph tag create kudo-indexer/<version> --tag prod
+```
 
 ## Reading it
 
@@ -74,7 +79,9 @@ Hasura.
 ```ts
 import { createKudoIndexerClient } from "./client";
 
-const kudo = createKudoIndexerClient({ url: "http://localhost:8080/v1/graphql" });
+const kudo = createKudoIndexerClient({
+  url: "https://api.goldsky.com/api/public/<project>/subgraphs/kudo-indexer/prod/gn",
+});
 
 await kudo.listOpenAsks({ limit: 20 });
 await kudo.getAgentRecord("0x06ab15b10f47a6eda0b493202cd23794b7557957");
@@ -88,9 +95,10 @@ Or query GraphQL directly:
 
 ```graphql
 {
-  Covenant(
-    where: { askOpen: { _eq: true }, hidden: { _eq: false } }
-    order_by: { mintedAt: desc }
+  covenants(
+    where: { askOpen: true, hidden: false }
+    orderBy: mintedAt
+    orderDirection: desc
   ) {
     id agentName ask promise owner mintedAt
   }
@@ -99,48 +107,49 @@ Or query GraphQL directly:
 
 ## Settlement webhooks
 
-Set `ENVIO_KUDO_WEBHOOK_URL` and the indexer POSTs each covenant event once
-it is live (never during backfill):
+A subgraph can't make HTTP calls, so webhooks come from Goldsky instead. It
+posts every change to an entity's rows. Point it at `CovenantEvent` (run
+`goldsky subgraph webhook list-entities kudo-indexer/<version>` for the exact
+entity name):
 
-```json
-{
-  "id": "4663:103000123_4",
-  "type": "covenant.AskSettled",
-  "chainId": 4663,
-  "covenantId": "0x1930…:12",
-  "contract": "0x1930…",
-  "nftId": "12",
-  "agentWallet": "0x…",
-  "agentId": "20032",
-  "status": "Minted",
-  "askOpen": false,
-  "value": "https://gist.github.com/…",
-  "blockNumber": 103000123,
-  "timestamp": 1793478183,
-  "txHash": "0x…"
-}
+```bash
+goldsky subgraph webhook create kudo-indexer/<version> \
+  --name covenant-events \
+  --entity covenant_event \
+  --url https://kudo.example/api/indexer/webhook \
+  --secret "$WEBHOOK_SECRET"
 ```
 
-`type` is one of `covenant.Minted`, `.AskSettled`, `.PromiseSettled`,
-`.StatusSet`, `.Transferred` and `.Burned`.
+Each delivery carries a `goldsky-webhook-secret` header, so check it on
+receipt. `kind` on the row is one of `Minted`, `AskSettled`, `PromiseSettled`,
+`StatusSet`, `Transferred` and `Burned`.
 
-If `ENVIO_KUDO_WEBHOOK_SECRET` is set, `x-kudo-signature` carries the
-HMAC-SHA256 of the raw body, in hex. Delivery is best-effort and
-at-least-once:
+Deliveries can repeat, so dedupe on the row `id`. A reorg can cause a row to
+be sent again or reverted.
 
-- Dedupe on `id`.
-- Treat a delivery as provisional, because a reorg rolls the indexer back but
-  cannot recall a webhook that was already sent.
-- For anything that must not be missed, poll GraphQL as a backstop.
+## Testing
+
+`graph build` compiles the mapping, and that check runs in CI.
+
+To check against real chain data, run a local Graph Node (Docker: graph-node,
+IPFS and Postgres) with an archive RPC for `robinhood-mainnet`, then
+`graph create` and `graph deploy` to it. The public RPC
+(`rpc.mainnet.chain.robinhood.com`) keeps only about the last 6,000 blocks of
+state. It can sync the events, but it can't answer the mint-time contract
+calls for older blocks, so local runs against it need those calls stubbed.
+
+With the calls stubbed, a full-history local run produced exactly the same
+results as the Envio indexer on the `envio` branch: 123 covenants, 16 agents,
+646 events, with no row different.
 
 ## Known limits
 
-- `agentId` and `agentName` are read at the chain head when a covenant is
-  first indexed, and then cached. A later rename shows up only after a resync.
+- `agentName` is the name as of the mint block. A later rename shows up on the
+  agent's next covenant.
 - `askSettledBy` and `promiseSettledBy` record the transaction sender. For a
   write from a smart account, that is the bundler. kudo-client resolves the
   real actor from the tx (`soleActor`), and `askSettledTx` is there so it can
   keep doing that.
 - Contract addresses are copied from kudo-client's
-  `src/lib/chain-list-fallback.ts`. A redeploy needs adding to `config.yaml`
-  and `src/lib/contracts.ts`.
+  `src/lib/chain-list-fallback.ts`. A redeploy needs a new data source in
+  `subgraph.yaml` and an entry in `src/contracts.ts`.
