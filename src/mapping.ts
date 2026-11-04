@@ -1,4 +1,4 @@
-import { Address, BigInt, ethereum } from "@graphprotocol/graph-ts";
+import { Address, BigInt, Bytes, ethereum } from "@graphprotocol/graph-ts";
 import {
   AskSettlementSet,
   CovenantMinted,
@@ -8,9 +8,11 @@ import {
   Transfer,
 } from "../generated/Kudo/Kudo";
 import { IdentityRegistry } from "../generated/Kudo/IdentityRegistry";
-import { Covenant, CovenantEvent, Ownership } from "../generated/schema";
+import { Activity, Agent, Covenant, Ownership } from "../generated/schema";
 import {
+  ENTRY_POINTS,
   IDENTITY_REGISTRY,
+  USER_OPERATION_EVENT,
   ZERO_ADDRESS,
   covenantKey,
   decodeStatus,
@@ -22,6 +24,60 @@ import {
 } from "./contracts";
 import { loadAgent, saveCovenant } from "./state";
 
+// Room for a block's log indexes in the Activity sort key.
+const ORDER_SCALE = BigInt.fromI32(1_000_000);
+
+/**
+ * The account behind one log (kudo-client `actorOfLog`).
+ *
+ * Agents' gas is sponsored, so their writes arrive as ERC-4337 bundles whose
+ * signer is the bundler. The account is the `sender` of the first
+ * `UserOperationEvent` the EntryPoint emits after this log. A log after the
+ * last such event belongs to no operation and is left unattributed (null).
+ */
+function actorOf(event: ethereum.Event): Address | null {
+  const receipt = event.receipt;
+  if (receipt === null) return event.transaction.from;
+
+  let sawOperation = false;
+  let best: Address | null = null;
+  let bestIndex: BigInt | null = null;
+  const logs = receipt.logs;
+  for (let i = 0; i < logs.length; i++) {
+    const log = logs[i];
+    if (!ENTRY_POINTS.includes(log.address.toHexString())) continue;
+    if (log.topics.length < 3 || log.topics[0].toHexString() != USER_OPERATION_EVENT) continue;
+    sawOperation = true;
+    if (!log.logIndex.gt(event.logIndex)) continue;
+    if (bestIndex === null || log.logIndex.lt(bestIndex as BigInt)) {
+      bestIndex = log.logIndex;
+      best = Address.fromBytes(Bytes.fromUint8Array(log.topics[2].subarray(12, 32)));
+    }
+  }
+  return sawOperation ? best : event.transaction.from;
+}
+
+/** Bytes as text where every byte is printable ASCII, else null. */
+function printable(value: Bytes): string | null {
+  if (value.length == 0) return null;
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i];
+    if (c < 0x20 || c > 0x7e) return null;
+  }
+  const text = value.toString().trim();
+  return text.length > 0 ? text : null;
+}
+
+/**
+ * The teeId as the agent recorded it (kudo-client `decodeTeeId`): the text
+ * it wrote, or the raw hex where the bytes are not text.
+ */
+function decodeTeeId(value: Bytes): string | null {
+  if (value.length == 0) return null;
+  const text = printable(value);
+  return text !== null ? text : value.toHexString();
+}
+
 /** Status and askOpen, recomputed from what the covenant now records. */
 function rederive(covenant: Covenant): void {
   covenant.status = presentedStatus(
@@ -32,46 +88,64 @@ function rederive(covenant: Covenant): void {
   covenant.askOpen = isAskOpen(covenant.status, covenant.askSettlement);
 }
 
-/** Append one row to the covenant's history. */
-function record(event: ethereum.Event, covenant: Covenant, kind: string, value: string): void {
-  const row = new CovenantEvent(event.transaction.hash.concatI32(event.logIndex.toI32()));
+/** Append one row to the activity feed, with everything the row shows. */
+function record(
+  event: ethereum.Event,
+  covenant: Covenant,
+  action: string,
+  actor: Bytes | null,
+  status: string | null,
+  detail: string | null,
+  proof: string | null,
+  counterparty: Bytes | null,
+): void {
+  const row = new Activity(event.transaction.hash.concatI32(event.logIndex.toI32()));
+  row.order = event.block.number.times(ORDER_SCALE).plus(event.logIndex);
+  row.action = action;
   row.covenant = covenant.id;
-  row.kind = kind;
-  row.contract = covenant.contract;
   row.nftId = covenant.nftId;
+  row.contractAddress = covenant.contractAddress;
+  row.isLegacy = covenant.isLegacy;
+  row.hidden = covenant.hidden;
+
+  row.actor = actor;
+  if (actor !== null) {
+    const actorAgent = Agent.load((actor as Bytes).toHexString());
+    if (actorAgent !== null) row.actorName = actorAgent.name;
+  }
+
   row.agentWallet = covenant.agentWallet;
-  row.value = value;
-  row.blockNumber = event.block.number;
-  row.timestamp = event.block.timestamp;
-  row.logIndex = event.logIndex;
+  row.agentName = covenant.agentName;
+  row.agentId = covenant.agentId;
+  row.nftType = covenant.nftType;
+  row.status = status;
+  row.detail = detail;
+  row.proof = proof;
+  row.counterparty = counterparty;
+
   row.txHash = event.transaction.hash;
   row.txFrom = event.transaction.from;
+  row.blockNumber = event.block.number;
+  row.logIndex = event.logIndex;
+  row.timestamp = event.block.timestamp;
   row.save();
 }
 
-/**
- * The covenant an event is about, loaded and ready to change, or null for
- * one that was never minted. Callers change it, then call `commit`.
- */
-function loadCovenant(event: ethereum.Event, nftId: BigInt): Covenant | null {
-  return Covenant.load(covenantKey(event.address, nftId));
-}
-
-/** Save a changed covenant through the rollups. `before` is its row as loaded. */
-function commit(event: ethereum.Event, before: Covenant, after: Covenant): void {
-  after.updatedAt = event.block.timestamp;
-  rederive(after);
-  const agent = loadAgent(after.agentWallet, event.block.timestamp);
-  saveCovenant(before, after, agent);
-}
-
-/** A copy of a covenant row, so the rollups can compare old against new. */
+/** A copy of what the rollups compare, taken before a covenant changes. */
 function snapshot(covenant: Covenant): Covenant {
   const copy = new Covenant(covenant.id);
   copy.hidden = covenant.hidden;
   copy.status = covenant.status;
   copy.askOpen = covenant.askOpen;
   return copy;
+}
+
+/** Save a changed covenant through the rollups. */
+function commit(event: ethereum.Event, before: Covenant, after: Covenant): void {
+  after.updatedAt = event.block.timestamp;
+  rederive(after);
+  const agent = loadAgent(after.agentWallet, event.block.timestamp);
+  saveCovenant(before, after, agent);
 }
 
 export function handleCovenantMinted(event: CovenantMinted): void {
@@ -85,33 +159,32 @@ export function handleCovenantMinted(event: CovenantMinted): void {
   // transaction input either; the contract is asked instead, at this block.
   let agentId: BigInt | null = null;
   let agentName: string | null = null;
+  let teeId: string | null = null;
   const covenantCall = Kudo.bind(contract).try_getCovenant(nftId);
   if (!covenantCall.reverted) {
     agentId = covenantCall.value.agentId;
-    const nameCall = IdentityRegistry.bind(Address.fromString(IDENTITY_REGISTRY)).try_getMetadata(
-      covenantCall.value.agentId,
-      "name",
-    );
-    if (!nameCall.reverted && nameCall.value.length > 0) {
-      const name = nameCall.value.toString().trim();
-      if (name.length > 0) agentName = name;
-    }
+    const registry = IdentityRegistry.bind(Address.fromString(IDENTITY_REGISTRY));
+    const nameCall = registry.try_getMetadata(covenantCall.value.agentId, "name");
+    if (!nameCall.reverted) agentName = printable(nameCall.value);
+    const teeCall = registry.try_getMetadata(covenantCall.value.agentId, "teeId");
+    if (!teeCall.reverted) teeId = decodeTeeId(teeCall.value);
   }
 
   const existing = Covenant.load(id);
-  const before: Covenant | null = existing == null ? null : snapshot(existing);
+  const before: Covenant | null = existing === null ? null : snapshot(existing);
   const ownership = Ownership.load(id);
 
   const covenant = new Covenant(id);
-  covenant.contract = contract;
   covenant.nftId = nftId;
+  covenant.contractAddress = contract;
   covenant.isLegacy = isLegacy(contract);
   covenant.hidden = isHidden(contract, nftId);
   covenant.agent = wallet.toHexString();
   covenant.agentWallet = wallet;
   covenant.agentId = agentId;
   covenant.agentName = agentName;
-  covenant.owner = ownership == null ? wallet : ownership.owner;
+  covenant.teeId = teeId;
+  covenant.owner = ownership === null ? wallet : ownership.owner;
   covenant.nftType = event.params.nftType;
   covenant.ask = event.params.ask;
   covenant.promise = event.params.covenantPromise;
@@ -131,51 +204,59 @@ export function handleCovenantMinted(event: CovenantMinted): void {
   // identity wins wherever it has one.
   if (agentId !== null) agent.agentId = agentId;
   if (agentName !== null) agent.name = agentName;
+  if (teeId !== null) agent.teeId = teeId;
   agent.lastCovenantAt = event.block.timestamp;
   saveCovenant(before, covenant, agent);
 
-  record(event, covenant, "Minted", event.params.ask);
+  record(event, covenant, "minted", wallet, null, event.params.covenantPromise, null, null);
 }
 
 export function handleAskSettlementSet(event: AskSettlementSet): void {
-  const covenant = loadCovenant(event, event.params.nftId);
-  if (covenant == null) return;
+  const covenant = Covenant.load(covenantKey(event.address, event.params.nftId));
+  if (covenant === null) return;
   const before = snapshot(covenant);
+  const actor = actorOf(event);
 
   covenant.askSettlement = event.params.askSettlement;
   covenant.promiseDetail = event.params.promiseDetails;
   covenant.askSettledAt = event.block.timestamp;
-  covenant.askSettledBy = event.transaction.from;
+  covenant.askSettledBy = actor;
   covenant.askSettledTx = event.transaction.hash;
   commit(event, before, covenant);
 
-  record(event, covenant, "AskSettled", event.params.askSettlement);
+  const detail = event.params.promiseDetails.length > 0 ? event.params.promiseDetails : null;
+  record(event, covenant, "askSettled", actor, null, detail, event.params.askSettlement, null);
 }
 
 export function handlePromiseSettlementSet(event: PromiseSettlementSet): void {
-  const covenant = loadCovenant(event, event.params.nftId);
-  if (covenant == null) return;
+  const covenant = Covenant.load(covenantKey(event.address, event.params.nftId));
+  if (covenant === null) return;
   const before = snapshot(covenant);
+  // Only the agent can settle its own promise, so an unattributable bundle
+  // still names the agent (as kudo-client does).
+  const resolved = actorOf(event);
+  const actor: Bytes = resolved !== null ? (resolved as Bytes) : covenant.agentWallet;
 
   covenant.promiseSettlement = event.params.promiseSettlement;
   covenant.promiseSettledAt = event.block.timestamp;
-  covenant.promiseSettledBy = event.transaction.from;
+  covenant.promiseSettledBy = actor;
   covenant.promiseSettledTx = event.transaction.hash;
   commit(event, before, covenant);
 
-  record(event, covenant, "PromiseSettled", event.params.promiseSettlement);
+  record(event, covenant, "promiseSettled", actor, null, null, event.params.promiseSettlement, null);
 }
 
 export function handleCovenantPromiseSet(event: CovenantPromiseSet): void {
-  const covenant = loadCovenant(event, event.params.nftId);
-  if (covenant == null) return;
+  const covenant = Covenant.load(covenantKey(event.address, event.params.nftId));
+  if (covenant === null) return;
   const before = snapshot(covenant);
+  const resolved = actorOf(event);
+  const actor: Bytes = resolved !== null ? (resolved as Bytes) : covenant.agentWallet;
 
-  const raw = event.params.status;
-  covenant.recordedStatus = decodeStatus(raw, event.address);
+  covenant.recordedStatus = decodeStatus(event.params.status, event.address);
   commit(event, before, covenant);
 
-  record(event, covenant, "StatusSet", covenant.recordedStatus + " (" + raw.toString() + ")");
+  record(event, covenant, "statusChanged", actor, covenant.recordedStatus, null, null, null);
 }
 
 export function handleTransfer(event: Transfer): void {
@@ -191,22 +272,20 @@ export function handleTransfer(event: Transfer): void {
   // owner up from Ownership.
   if (from.toHexString() == ZERO_ADDRESS) return;
 
-  const covenant = loadCovenant(event, event.params.tokenId);
-  if (covenant == null) return;
+  const covenant = Covenant.load(id);
+  if (covenant === null) return;
   const before = snapshot(covenant);
 
   // A covenant is burned once it is settled. It keeps its last holder as
   // owner, so the card can still say who held it, and is marked burned.
-  if (to.toHexString() == ZERO_ADDRESS) {
+  const burned = to.toHexString() == ZERO_ADDRESS;
+  if (burned) {
     covenant.burned = true;
     covenant.burnedAt = event.block.timestamp;
-    commit(event, before, covenant);
-    record(event, covenant, "Burned", from.toHexString());
-    return;
+  } else {
+    covenant.owner = to;
   }
-
-  covenant.owner = to;
   commit(event, before, covenant);
-  record(event, covenant, "Transferred", to.toHexString());
-}
 
+  record(event, covenant, burned ? "burned" : "transferred", from, null, null, null, to);
+}

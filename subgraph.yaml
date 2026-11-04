@@ -26,7 +26,7 @@ dataSources:
       entities:
         - Covenant
         - Agent
-        - CovenantEvent
+        - Activity
         - Ownership
         - Stats
       abis:
@@ -37,14 +37,19 @@ dataSources:
       eventHandlers:
         - event: CovenantMinted(uint256,indexed address,string,string,string)
           handler: handleCovenantMinted
+          receipt: true
         - event: AskSettlementSet(uint256,string,string)
           handler: handleAskSettlementSet
+          receipt: true
         - event: PromiseSettlementSet(uint256,string)
           handler: handlePromiseSettlementSet
+          receipt: true
         - event: CovenantPromiseSet(indexed uint256,uint8)
           handler: handleCovenantPromiseSet
+          receipt: true
         - event: Transfer(indexed address,indexed address,indexed uint256)
           handler: handleTransfer
+          receipt: true
       file: ./src/mapping.ts
 
   - kind: ethereum/contract

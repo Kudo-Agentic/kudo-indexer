@@ -1,34 +1,38 @@
 # Kudo covenants on Robinhood Chain.
 #
-# Statuses use kudo-client's vocabulary (src/lib/types/cnft.ts): Minted is
-# shown as "Open", Failed as "Failed". Addresses are Bytes and come back as
-# lowercase hex.
+# Shaped for kudo-client: field names follow its `CovenantDetails` and
+# `Activity` types (src/lib/types/cnft.ts, src/lib/types/activity.ts) and the
+# enum values are its own `Status` and `ActivityAction` strings, so the UI can
+# render rows as they come. Addresses are Bytes and come back as lowercase
+# hex; BigInts come back as decimal strings.
+
+# kudo-client `Status`. Shown as Open / Ongoing / Completed / Failed.
 enum CovenantStatus {
-  Minted
-  Ongoing
-  Completed
-  Failed
+  minted
+  ongoing
+  completed
+  failed
 }
 
-enum CovenantEventKind {
-  Minted
-  AskSettled
-  PromiseSettled
-  StatusSet
-  Transferred
-  # Sent to the zero address, which Kudo does once a covenant is settled.
-  Burned
+# kudo-client `ActivityAction`.
+enum ActivityAction {
+  minted
+  promiseSettled
+  askSettled
+  statusChanged
+  transferred
+  burned
 }
 
-# One covenant NFT.
+# One covenant NFT: one card.
 #
 # Ids restart at zero on each redeploy, so a covenant is keyed by contract and
 # id together: "<contract lowercased>:<nftId>", the same as kudo-client's
 # `covenantKey`.
 type Covenant @entity(immutable: false) {
   id: ID!
-  contract: Bytes!
   nftId: BigInt!
+  contractAddress: Bytes!
   # Minted on a contract the chain has outgrown. Shown, never written to.
   isLegacy: Boolean!
   # On the client's blacklist. Indexed anyway; excluded from every count.
@@ -36,11 +40,14 @@ type Covenant @entity(immutable: false) {
 
   agent: Agent!
   agentWallet: Bytes!
-  # The agent's ERC-8004 identity, read from the contract at mint. Null when
-  # the read failed.
+  # The agent's ERC-8004 identity, read from the contract at mint.
   agentId: BigInt
-  # The identity's "name" metadata at the mint block, where it has one.
+  # The identity's "name" metadata at the mint block. Null where it has none:
+  # the UI labels those "Agent {nftId}".
   agentName: String
+  # The identity's "teeId" metadata at the mint block: what the UI shows as
+  # Verified. Null where the agent recorded none.
+  teeId: String
 
   owner: Bytes!
   nftType: String!
@@ -50,8 +57,9 @@ type Covenant @entity(immutable: false) {
 
   askSettlement: String!
   askSettledAt: BigInt
-  # Sender of the settling transaction. For a smart-account write this is the
-  # bundler, not the account; see askSettledTx.
+  # The account that met the ask: the transaction's signer, or, for an
+  # ERC-4337 bundle, the smart account whose operation emitted the event
+  # (kudo-client `actorOfLog`). Never the bundler.
   askSettledBy: Bytes
   askSettledTx: Bytes
 
@@ -62,8 +70,8 @@ type Covenant @entity(immutable: false) {
 
   # What the contract's status field says.
   recordedStatus: CovenantStatus!
-  # What the UI shows: a covenant with both proofs written reads Completed
-  # unless the contract has said Completed or Failed itself (kudo-client
+  # What the UI shows: a covenant with both proofs written reads completed
+  # unless the contract has said completed or failed itself (kudo-client
   # `presentedStatus`).
   status: CovenantStatus!
   # The ask is waiting to be met: no ask settlement and not resolved.
@@ -79,17 +87,19 @@ type Covenant @entity(immutable: false) {
   mintedTx: Bytes!
   updatedAt: BigInt!
 
-  events: [CovenantEvent!]! @derivedFrom(field: "covenant")
+  activities: [Activity!]! @derivedFrom(field: "covenant")
 }
 
 # An agent, as the covenants it minted describe it: keyed by its wallet,
-# lowercased, like kudo-client's AgentSummary.
+# lowercased, like kudo-client's AgentSummary. Hidden covenants are not
+# counted.
 type Agent @entity(immutable: false) {
   id: ID!
   wallet: Bytes!
   # From its newest covenant that carries one.
   agentId: BigInt
   name: String
+  teeId: String
 
   total: Int!
   minted: Int!
@@ -106,23 +116,48 @@ type Agent @entity(immutable: false) {
   covenants: [Covenant!]! @derivedFrom(field: "agent")
 }
 
-# Every Kudo event that touched a covenant: the activity feed and the proof
-# trail.
-type CovenantEvent @entity(immutable: true) {
+# One row of the activity feed (kudo-client `Activity`), with everything the
+# row shows already on it.
+type Activity @entity(immutable: true) {
   id: Bytes!
+  # Sort key: block number * 1e6 + log index. Order by this for a feed that
+  # stays in chain order within a block.
+  order: BigInt!
+
+  action: ActivityAction!
   covenant: Covenant!
-  kind: CovenantEventKind!
-  contract: Bytes!
   nftId: BigInt!
+  contractAddress: Bytes!
+  isLegacy: Boolean!
+  hidden: Boolean!
+
+  # Who acted: the transaction's signer or, for an ERC-4337 bundle, the smart
+  # account behind this log. For a transfer or burn, the account it left.
+  # Null when a bundle leaves it unattributable.
+  actor: Bytes
+  # The actor's agent name, where the actor is an agent that has minted here.
+  actorName: String
+
   agentWallet: Bytes!
-  # The settlement text, the new status, the new owner, or (for Burned) the
-  # holder that burned it.
-  value: String!
-  blockNumber: BigInt!
-  timestamp: BigInt!
-  logIndex: BigInt!
+  agentName: String
+  agentId: BigInt
+  nftType: String!
+
+  # statusChanged: the status it moved to (as the contract numbers it).
+  status: CovenantStatus
+  # minted: the promise. askSettled: the promise detail written with it.
+  detail: String
+  # askSettled / promiseSettled: the proof, a transaction hash or a URL.
+  proof: String
+  # transferred / burned: who it went to.
+  counterparty: Bytes
+
   txHash: Bytes!
   txFrom: Bytes!
+  blockNumber: BigInt!
+  logIndex: BigInt!
+  # Unix seconds.
+  timestamp: BigInt!
 }
 
 # Who holds each covenant NFT. Kept apart from Covenant because the mint's

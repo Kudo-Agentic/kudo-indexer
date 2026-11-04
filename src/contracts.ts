@@ -20,8 +20,8 @@ export const IDENTITY_REGISTRY = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432";
  * The current contract restored MINTED, which the legacy one dropped, so the
  * same raw uint8 means different things on each.
  */
-const WITH_MINTED: string[] = ["Minted", "Ongoing", "Completed", "Failed"];
-const WITHOUT_MINTED: string[] = ["Ongoing", "Completed", "Failed"];
+const WITH_MINTED: string[] = ["minted", "ongoing", "completed", "failed"];
+const WITHOUT_MINTED: string[] = ["ongoing", "completed", "failed"];
 
 const schemeFor = (contract: Bytes): string[] =>
   contract.toHexString() == LEGACY ? WITHOUT_MINTED : WITH_MINTED;
@@ -54,18 +54,29 @@ export const initialStatus = (contract: Bytes): string => schemeFor(contract)[0]
 
 /**
  * The status a covenant presents (kudo-client `presentedStatus`): a covenant
- * whose ask and promise are both settled reads Completed, unless the contract
- * has explicitly said Completed or Failed.
+ * whose ask and promise are both settled reads completed, unless the contract
+ * has explicitly said completed or failed.
  */
 export function presentedStatus(
   recorded: string,
   askSettlement: string,
   promiseSettlement: string,
 ): string {
-  if (recorded == "Completed" || recorded == "Failed") return recorded;
-  return askSettlement.length > 0 && promiseSettlement.length > 0 ? "Completed" : recorded;
+  if (recorded == "completed" || recorded == "failed") return recorded;
+  return askSettlement.length > 0 && promiseSettlement.length > 0 ? "completed" : recorded;
 }
 
 /** The ask is still waiting to be met. */
 export const isAskOpen = (status: string, askSettlement: string): boolean =>
-  askSettlement.length == 0 && status != "Completed" && status != "Failed";
+  askSettlement.length == 0 && status != "completed" && status != "failed";
+
+/** The ERC-4337 EntryPoints (v0.6, v0.7, v0.8), as in kudo-client's user-operations.ts. */
+export const ENTRY_POINTS: string[] = [
+  "0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789",
+  "0x0000000071727de22e5e9d8baf0edac6f37da032",
+  "0x4337084d9e255ff0702461cf8895ce9e3b5ff108",
+];
+
+/** UserOperationEvent(bytes32,address,address,uint256,bool,uint256,uint256); `sender` is topic 2. */
+export const USER_OPERATION_EVENT =
+  "0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f";

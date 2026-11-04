@@ -63,20 +63,20 @@ class Contribution {
 function shiftAgent(agent: Agent, c: Contribution, sign: i32): void {
   if (!c.counted) return;
   agent.total += sign;
-  if (c.status == "Minted") agent.minted += sign;
-  else if (c.status == "Ongoing") agent.ongoing += sign;
-  else if (c.status == "Completed") agent.completed += sign;
-  else if (c.status == "Failed") agent.failed += sign;
+  if (c.status == "minted") agent.minted += sign;
+  else if (c.status == "ongoing") agent.ongoing += sign;
+  else if (c.status == "completed") agent.completed += sign;
+  else if (c.status == "failed") agent.failed += sign;
   if (c.askOpen) agent.openAsks += sign;
 }
 
 function shiftStats(stats: Stats, c: Contribution, sign: i32): void {
   if (!c.counted) return;
   stats.covenants += sign;
-  if (c.status == "Minted") stats.minted += sign;
-  else if (c.status == "Ongoing") stats.ongoing += sign;
-  else if (c.status == "Completed") stats.completed += sign;
-  else if (c.status == "Failed") stats.failed += sign;
+  if (c.status == "minted") stats.minted += sign;
+  else if (c.status == "ongoing") stats.ongoing += sign;
+  else if (c.status == "completed") stats.completed += sign;
+  else if (c.status == "failed") stats.failed += sign;
   if (c.askOpen) stats.openAsks += sign;
 }
 
