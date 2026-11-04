@@ -206,4 +206,32 @@ describe("Kudo covenants", () => {
     );
     t.expect(transfers.map((row) => row.value)).toEqual([buyer]);
   });
+
+  it("marks a burned covenant and keeps its last holder as owner", async (t) => {
+    const indexer = createTestIndexer();
+    await indexer.process({
+      chains: {
+        [CHAIN]: {
+          simulate: [
+            ...mint(CURRENT, 6n, B + 0),
+            {
+              contract: "Kudo",
+              event: "Transfer",
+              srcAddress: CURRENT,
+              block: { number: B + 1, timestamp: 1_700_000_000 + 10 },
+              params: { from: agent, to: ZERO, tokenId: 6n },
+            },
+          ],
+        },
+      },
+    });
+
+    t.expect(await indexer.Covenant.getOrThrow(`${CURRENT}:6`)).toMatchObject({
+      owner: agent,
+      burned: true,
+      burnedAt: 1_700_000_010n,
+    });
+    const kinds = (await indexer.CovenantEvent.getAll()).map((row) => row.kind).sort();
+    t.expect(kinds).toEqual(["Burned", "Minted"]);
+  });
 });

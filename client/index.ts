@@ -37,6 +37,8 @@ export type Covenant = {
   recordedStatus: CovenantStatus;
   status: CovenantStatus;
   askOpen: boolean;
+  burned: boolean;
+  burnedAt: string | null;
   mintedAt: string;
   mintedBlock: number;
   mintedTx: string;
@@ -60,7 +62,7 @@ export type AgentRecord = {
 export type CovenantEvent = {
   id: string;
   covenant_id: string;
-  kind: "Minted" | "AskSettled" | "PromiseSettled" | "StatusSet" | "Transferred";
+  kind: "Minted" | "AskSettled" | "PromiseSettled" | "StatusSet" | "Transferred" | "Burned";
   value: string;
   agentWallet: string;
   blockNumber: number;
@@ -84,7 +86,7 @@ const COVENANT_FIELDS = `
   ask promise promiseDetail
   askSettlement askSettledAt askSettledBy askSettledTx
   promiseSettlement promiseSettledAt promiseSettledBy promiseSettledTx
-  recordedStatus status askOpen mintedAt mintedBlock mintedTx
+  recordedStatus status askOpen burned burnedAt mintedAt mintedBlock mintedTx
 `;
 
 const AGENT_FIELDS = `
@@ -97,6 +99,7 @@ const NUMERIC_KEYS = new Set([
   "agentId",
   "askSettledAt",
   "promiseSettledAt",
+  "burnedAt",
   "mintedAt",
   "firstCovenantAt",
   "lastCovenantAt",

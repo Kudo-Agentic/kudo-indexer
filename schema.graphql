@@ -15,6 +15,8 @@ enum CovenantEventKind {
   PromiseSettled
   StatusSet
   Transferred
+  # Sent to the zero address, which Kudo does once a covenant is settled.
+  Burned
 }
 
 # One covenant NFT.
@@ -66,6 +68,11 @@ type Covenant @index(fields: ["agentWallet", ["nftId", "DESC"]]) {
   # The ask is waiting to be met: no ask settlement and not resolved.
   askOpen: Boolean! @index
 
+  # The NFT was burned, which happens once a covenant settles. `owner` keeps
+  # its last holder.
+  burned: Boolean! @index
+  burnedAt: BigInt
+
   mintedAt: BigInt! @index
   mintedBlock: Int!
   mintedTx: String!
@@ -107,7 +114,8 @@ type CovenantEvent @index(fields: ["covenant", ["blockNumber", "DESC"]]) {
   contract: String!
   nftId: BigInt!
   agentWallet: String! @index
-  # The settlement text, the new status, or the new owner.
+  # The settlement text, the new status, the new owner, or (for Burned) the
+  # holder that burned it.
   value: String!
   blockNumber: Int! @index
   timestamp: BigInt! @index

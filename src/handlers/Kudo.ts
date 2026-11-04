@@ -147,6 +147,8 @@ indexer.onEvent({ contract: "Kudo", event: "CovenantMinted" }, async ({ event, c
     recordedStatus: initialStatus(contract.statusScheme),
     status: "Minted",
     askOpen: true,
+    burned: false,
+    burnedAt: undefined,
     mintedAt: timestamp,
     mintedBlock: event.block.number,
     mintedTx: event.transaction.hash,
@@ -206,6 +208,17 @@ indexer.onEvent({ contract: "Kudo", event: "Transfer" }, async ({ event, context
   // The mint's own Transfer comes before CovenantMinted, which picks the
   // owner up from Ownership.
   if (from === ZERO_ADDRESS) return;
+
+  // A covenant is burned once it is settled. It keeps its last holder as
+  // owner, so the card can still say who held it, and is marked burned.
+  if (to === ZERO_ADDRESS) {
+    const covenant = await update(context, event, tokenId, () => ({
+      burned: true,
+      burnedAt: BigInt(event.block.timestamp),
+    }));
+    if (covenant) await record(context, event, covenant, "Burned", from);
+    return;
+  }
 
   const covenant = await update(context, event, tokenId, () => ({ owner: to }));
   if (covenant) await record(context, event, covenant, "Transferred", to);

@@ -32,6 +32,8 @@ Events: `CovenantMinted`, `AskSettlementSet`, `PromiseSettlementSet`,
   - `status` is what the UI shows, following the client's `presentedStatus`:
     a covenant with both proofs written reads Completed.
   - `askOpen` means the ask is still waiting to be met.
+  - `burned` is set once the NFT goes to the zero address, which Kudo does
+    when a covenant settles. `owner` keeps the last holder.
   - `hidden` marks ids on the client's blacklist (legacy 0, 7 and 8). These
     are indexed but left out of every count.
 - **Agent**: keyed by wallet (lowercased), like the client's `AgentSummary`.
@@ -120,7 +122,7 @@ it is live (never during backfill):
 ```
 
 `type` is one of `covenant.Minted`, `.AskSettled`, `.PromiseSettled`,
-`.StatusSet` and `.Transferred`.
+`.StatusSet`, `.Transferred` and `.Burned`.
 
 If `ENVIO_KUDO_WEBHOOK_SECRET` is set, `x-kudo-signature` carries the
 HMAC-SHA256 of the raw body, in hex. Delivery is best-effort and
