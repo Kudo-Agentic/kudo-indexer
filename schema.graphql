@@ -1,0 +1,136 @@
+# Kudo covenants on Robinhood Chain.
+#
+# Statuses use kudo-client's vocabulary (src/lib/types/cnft.ts): Minted is
+# shown as "Open", Failed as "Failed".
+enum CovenantStatus {
+  Minted
+  Ongoing
+  Completed
+  Failed
+}
+
+enum CovenantEventKind {
+  Minted
+  AskSettled
+  PromiseSettled
+  StatusSet
+  Transferred
+}
+
+# One covenant NFT.
+#
+# Ids restart at zero on each redeploy, so a covenant is keyed by contract and
+# id together: "<contract lowercased>:<nftId>", the same as kudo-client's
+# `covenantKey`.
+type Covenant @index(fields: ["agentWallet", ["nftId", "DESC"]]) {
+  id: ID!
+  contract: String! @index
+  nftId: BigInt! @index
+  # Minted on a contract the chain has outgrown. Shown, never written to.
+  isLegacy: Boolean!
+  # On the client's blacklist. Indexed anyway; excluded from every count.
+  hidden: Boolean! @index
+
+  agent: Agent!
+  agentWallet: String! @index
+  # The agent's ERC-8004 identity, read from the contract at mint. Unset when
+  # the read failed.
+  agentId: BigInt @index
+  # The identity's "name" metadata at mint time, where it has one.
+  agentName: String
+
+  owner: String! @index
+  nftType: String! @index
+  ask: String!
+  promise: String!
+  promiseDetail: String!
+
+  askSettlement: String!
+  askSettledAt: BigInt
+  # Sender of the settling transaction. For a smart-account write this is the
+  # bundler, not the account; see askSettledTx.
+  askSettledBy: String
+  askSettledTx: String
+
+  promiseSettlement: String!
+  promiseSettledAt: BigInt
+  promiseSettledBy: String
+  promiseSettledTx: String
+
+  # What the contract's status field says.
+  recordedStatus: CovenantStatus!
+  # What the UI shows. The current contract never advances `status`, so a
+  # covenant with both proofs written reads Completed unless the contract has
+  # said Completed or Failed itself (kudo-client `presentedStatus`).
+  status: CovenantStatus! @index
+  # The ask is waiting to be met: no ask settlement and not resolved.
+  askOpen: Boolean! @index
+
+  mintedAt: BigInt! @index
+  mintedBlock: Int!
+  mintedTx: String!
+  updatedAt: BigInt!
+
+  events: [CovenantEvent!]! @derivedFrom(field: "covenant")
+}
+
+# An agent, as the covenants it minted describe it: keyed by its wallet,
+# lowercased, like kudo-client's AgentSummary.
+type Agent {
+  id: ID!
+  wallet: String!
+  # From its newest covenant that carries one.
+  agentId: BigInt
+  name: String
+
+  total: Int!
+  minted: Int!
+  ongoing: Int!
+  completed: Int!
+  failed: Int!
+  openAsks: Int!
+  # completed / (completed + failed); unset until one resolves.
+  completionRate: Float
+
+  firstCovenantAt: BigInt!
+  lastCovenantAt: BigInt! @index
+
+  covenants: [Covenant!]! @derivedFrom(field: "agent")
+}
+
+# Every Kudo event that touched a covenant, newest-first by blockNumber: the
+# activity feed and the proof trail.
+type CovenantEvent @index(fields: ["covenant", ["blockNumber", "DESC"]]) {
+  id: ID!
+  covenant: Covenant!
+  kind: CovenantEventKind! @index
+  contract: String!
+  nftId: BigInt!
+  agentWallet: String! @index
+  # The settlement text, the new status, or the new owner.
+  value: String!
+  blockNumber: Int! @index
+  timestamp: BigInt! @index
+  logIndex: Int!
+  txHash: String!
+  txFrom: String!
+}
+
+# Who holds each covenant NFT. Kept apart from Covenant because the mint's
+# Transfer is emitted before CovenantMinted, when there is no covenant yet.
+type Ownership {
+  id: ID!
+  owner: String!
+}
+
+# Chain-wide totals for the metrics row. A single row, id "global".
+type Stats {
+  id: ID!
+  covenants: Int!
+  agents: Int!
+  minted: Int!
+  ongoing: Int!
+  completed: Int!
+  failed: Int!
+  openAsks: Int!
+}

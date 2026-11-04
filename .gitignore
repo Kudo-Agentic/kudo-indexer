@@ -1,0 +1,7 @@
+node_modules/
+build/
+generated/
+.env
+.pnpm-store
+*.res.js
+*.res.mjs

@@ -1,0 +1,26 @@
+{
+  "name": "kudo-indexer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Envio HyperIndex indexer for Kudo covenants on Robinhood Chain",
+  "type": "module",
+  "scripts": {
+    "codegen": "envio codegen",
+    "dev": "envio dev",
+    "start": "envio start",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --test-timeout=20000"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.2",
+    "typescript": "6.0.3",
+    "vitest": "4.1.0"
+  },
+  "dependencies": {
+    "envio": "3.14.0",
+    "viem": "2.54.0"
+  },
+  "engines": {
+    "node": ">=22.15.0"
+  }
+}

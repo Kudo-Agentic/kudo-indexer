@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=./node_modules/envio/evm.schema.json
+name: kudo-indexer
+description: >-
+  Kudo covenants on Robinhood Chain: covenants, agent records and the event
+  history behind them, served over GraphQL.
+# Addresses arrive lowercased, which is how kudo-client keys covenants
+# (`covenantKey`) and agents (wallet, lowercased).
+address_format: lowercase
+disable_default_cross_chain: true
+# Every handler records which transaction an event came in (block timestamp
+# is always selected).
+field_selection:
+  transaction_fields: [hash, from]
+
+contracts:
+  # Both Kudo deployments share abi v5's signatures, so one definition serves
+  # both addresses. They differ in how the raw status uint8 is numbered; that
+  # is resolved per address in src/lib/contracts.ts.
+  - name: Kudo
+    events:
+      - event: CovenantMinted(uint256 nftId, address indexed agent, string nftType, string covenantPromise, string ask)
+      - event: AskSettlementSet(uint256 nftId, string askSettlement, string promiseDetails)
+      - event: PromiseSettlementSet(uint256 nftId, string promiseSettlement)
+      - event: CovenantPromiseSet(uint256 indexed nftId, uint8 status)
+      - event: Transfer(address indexed from, address indexed to, uint256 indexed tokenId)
+
+chains:
+  - id: 4663 # Robinhood Chain
+    hypersync_config:
+      url: https://robinhood.hypersync.xyz
+    # RPC is only a fallback for HyperSync and the source of the contract
+    # reads in src/lib/effects.ts.
+    rpc:
+      - url: ${ENVIO_ROBINHOOD_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
+        for: fallback
+    # The legacy contract's first log (its deploy). Nothing Kudo emitted
+    # before this.
+    start_block: 80443358
+    contracts:
+      - name: Kudo
+        address:
+          # Current contract: minted on and settled on.
+          - 0x1930d0feab14b024353bf22ade03db989ad640c7
+          # Legacy contract: covenants 0-9, read-only since the redeploy.
+          - 0xc269c6176f3418a84fcda5911723b0d358971351
