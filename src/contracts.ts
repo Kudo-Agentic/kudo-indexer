@@ -52,20 +52,6 @@ export function decodeStatus(raw: i32, contract: Bytes): string {
 /** The status a covenant starts in on its contract. */
 export const initialStatus = (contract: Bytes): string => schemeFor(contract)[0];
 
-/**
- * The status a covenant presents (kudo-client `presentedStatus`): a covenant
- * whose ask and promise are both settled reads completed, unless the contract
- * has explicitly said completed or failed.
- */
-export function presentedStatus(
-  recorded: string,
-  askSettlement: string,
-  promiseSettlement: string,
-): string {
-  if (recorded == "completed" || recorded == "failed") return recorded;
-  return askSettlement.length > 0 && promiseSettlement.length > 0 ? "completed" : recorded;
-}
-
 /** The ask is still waiting to be met. */
 export const isAskOpen = (status: string, askSettlement: string): boolean =>
   askSettlement.length == 0 && status != "completed" && status != "failed";

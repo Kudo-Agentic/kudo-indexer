@@ -20,7 +20,6 @@ import {
   isAskOpen,
   isHidden,
   isLegacy,
-  presentedStatus,
 } from "./contracts";
 import { loadAgent, saveCovenant } from "./state";
 
@@ -78,13 +77,14 @@ function decodeTeeId(value: Bytes): string | null {
   return text !== null ? text : value.toHexString();
 }
 
-/** Status and askOpen, recomputed from what the covenant now records. */
+/**
+ * Status and askOpen, recomputed from what the covenant now records.
+ *
+ * Status is the contract's own: only the evaluator moves a covenant to
+ * completed or failed, so written proofs alone never complete it.
+ */
 function rederive(covenant: Covenant): void {
-  covenant.status = presentedStatus(
-    covenant.recordedStatus,
-    covenant.askSettlement,
-    covenant.promiseSettlement,
-  );
+  covenant.status = covenant.recordedStatus;
   covenant.askOpen = isAskOpen(covenant.status, covenant.askSettlement);
 }
 

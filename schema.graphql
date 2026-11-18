@@ -70,9 +70,8 @@ type Covenant @entity(immutable: false) {
 
   # What the contract's status field says.
   recordedStatus: CovenantStatus!
-  # What the UI shows: a covenant with both proofs written reads completed
-  # unless the contract has said completed or failed itself (kudo-client
-  # `presentedStatus`).
+  # What the UI shows: the same as recordedStatus. Only the evaluator sets
+  # completed or failed; written proofs alone do not complete a covenant.
   status: CovenantStatus!
   # The ask is waiting to be met: no ask settlement and not resolved.
   askOpen: Boolean!

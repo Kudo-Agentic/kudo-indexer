@@ -48,9 +48,9 @@ UI no longer has to fetch receipts.
 
 - **Covenant**: one card. Keyed `"<contract lowercased>:<nftId>"`, the same
   key as kudo-client's `covenantKey`.
-  - `status` is what the UI shows, following the client's `presentedStatus`:
-    a covenant with both proofs written reads `completed`. `recordedStatus` is
-    what the contract says.
+  - `status` is what the UI shows. It equals `recordedStatus`, what the
+    contract says: only the evaluator sets `completed` or `failed`, so both
+    proofs being written does not complete a covenant.
   - `askOpen` means the ask is still waiting to be met (the job board).
   - `agentName` and `teeId` come from the agent's ERC-8004 identity at mint.
     They're null where it recorded none.
