@@ -75,7 +75,7 @@ describe("Kudo covenants", () => {
     });
   });
 
-  it("reads a covenant with both proofs written as completed", async (t) => {
+  it("keeps a covenant with both proofs written at its recorded status", async (t) => {
     const indexer = createTestIndexer();
     await indexer.process({
       chains: {
@@ -105,9 +105,9 @@ describe("Kudo covenants", () => {
 
     const covenant = await indexer.Covenant.getOrThrow(`${CURRENT}:4`);
     t.expect(covenant).toMatchObject({
-      // The contract never advanced status; the proofs make it completed.
+      // Proofs alone do not complete it: only the evaluator does.
       recordedStatus: "Minted",
-      status: "Completed",
+      status: "Minted",
       askOpen: false,
       askSettlement: "0xpaid",
       askSettledBy: buyer,
@@ -120,10 +120,10 @@ describe("Kudo covenants", () => {
 
     t.expect(await indexer.Agent.getOrThrow(agent)).toMatchObject({
       total: 1,
-      minted: 0,
-      completed: 1,
+      minted: 1,
+      completed: 0,
       openAsks: 0,
-      completionRate: 1,
+      completionRate: undefined,
     });
 
     const kinds = (await indexer.CovenantEvent.getAll())
@@ -131,6 +131,38 @@ describe("Kudo covenants", () => {
       .map((row) => row.kind)
       .sort();
     t.expect(kinds).toEqual(["AskSettled", "Minted", "PromiseSettled"]);
+  });
+
+  it("completes a covenant when the evaluator says so", async (t) => {
+    const indexer = createTestIndexer();
+    await indexer.process({
+      chains: {
+        [CHAIN]: {
+          simulate: [
+            ...mint(CURRENT, 5n, B + 0),
+            {
+              contract: "Kudo",
+              event: "CovenantPromiseSet",
+              srcAddress: CURRENT,
+              block: { number: B + 1, timestamp: 1_700_000_000 + 10 },
+              transaction: { hash: "0xevaluated", from: buyer },
+              params: { nftId: 5n, status: 2n },
+            },
+          ],
+        },
+      },
+    });
+
+    t.expect(await indexer.Covenant.getOrThrow(`${CURRENT}:5`)).toMatchObject({
+      recordedStatus: "Completed",
+      status: "Completed",
+      askOpen: false,
+    });
+    t.expect(await indexer.Agent.getOrThrow(agent)).toMatchObject({
+      minted: 0,
+      completed: 1,
+      completionRate: 1,
+    });
   });
 
   it("decodes legacy statuses without MINTED and keeps blacklisted ids out of the counts", async (t) => {

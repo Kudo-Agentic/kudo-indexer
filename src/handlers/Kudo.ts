@@ -6,7 +6,6 @@ import {
   initialStatus,
   isAskOpen,
   kudoContract,
-  presentedStatus,
 } from "../lib/contracts";
 import { getCovenantAgent, postWebhook, webhookConfigured } from "../lib/effects";
 import { loadAgent, saveCovenant } from "../lib/state";
@@ -25,13 +24,14 @@ type EventMeta = {
 
 const eventId = (event: EventMeta) => `${event.block.number}_${event.logIndex}`;
 
-/** Status and askOpen, recomputed from what the covenant now records. */
+/**
+ * Status and askOpen, recomputed from what the covenant now records.
+ *
+ * Status is the contract's own: only the evaluator moves a covenant to
+ * Completed or Failed, so written proofs alone never complete it.
+ */
 const withDerived = (covenant: Covenant): Covenant => {
-  const status = presentedStatus(
-    covenant.recordedStatus,
-    covenant.askSettlement,
-    covenant.promiseSettlement,
-  );
+  const status = covenant.recordedStatus;
   return { ...covenant, status, askOpen: isAskOpen(status, covenant.askSettlement) };
 };
 
