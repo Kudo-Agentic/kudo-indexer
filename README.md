@@ -29,8 +29,9 @@ Events: `CovenantMinted`, `AskSettlementSet`, `PromiseSettlementSet`,
   settlements (with block time, sender and tx), the owner, and the agent's
   ERC-8004 `agentId` and name, both read from chain at mint.
   - `recordedStatus` is what the contract says.
-  - `status` is what the UI shows, following the client's `presentedStatus`:
-    a covenant with both proofs written reads Completed.
+  - `status` is what the UI shows. It equals `recordedStatus`: only the
+    evaluator moves a covenant to Completed or Failed, so both proofs being
+    written does not complete it.
   - `askOpen` means the ask is still waiting to be met.
   - `hidden` marks ids on the client's blacklist (legacy 0, 7 and 8). These
     are indexed but left out of every count.

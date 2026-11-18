@@ -59,9 +59,8 @@ type Covenant @index(fields: ["agentWallet", ["nftId", "DESC"]]) {
 
   # What the contract's status field says.
   recordedStatus: CovenantStatus!
-  # What the UI shows. The current contract never advances `status`, so a
-  # covenant with both proofs written reads Completed unless the contract has
-  # said Completed or Failed itself (kudo-client `presentedStatus`).
+  # What the UI shows: the same as recordedStatus. Only the evaluator sets
+  # Completed or Failed; written proofs alone do not complete a covenant.
   status: CovenantStatus! @index
   # The ask is waiting to be met: no ask settlement and not resolved.
   askOpen: Boolean! @index
